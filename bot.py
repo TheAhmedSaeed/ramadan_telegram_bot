@@ -34,7 +34,7 @@ TELEGRAM_API_HASH = os.environ["TELEGRAM_API_HASH"]
 
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 GEMINI_MODEL_ANALYSIS = "gemini-2.5-flash"  # Full model for video analysis
-GEMINI_MODEL_QA = "gemini-2.5-flash-lite"  # Fast model for text-only Q&A
+GEMINI_MODEL_QA = "gemini-2.5-flash"  # Same model for Q&A but text-only (fast)
 
 GEMINI_MAX_RETRIES = 3
 GEMINI_RETRY_DELAY = 5  # seconds
@@ -60,21 +60,21 @@ SYSTEM_PROMPT_ANALYSIS = (
 )
 
 TRANSCRIPT_PROMPT = (
-    "Produce a comprehensive, detailed transcript and summary of this entire video. "
-    "Include:\n"
-    "- Full transcript of all spoken words (in the original language)\n"
-    "- Descriptions of all visual elements, text on screen, and actions\n"
-    "- Key topics, arguments, and conclusions\n"
-    "- Any Quran verses, hadith, or scholarly references mentioned\n"
-    "- Speaker names if mentioned\n"
-    "Be as thorough as possible — this text will be used to answer questions later."
+    "أنتج نصاً تفصيلياً شاملاً لهذا الفيديو بالكامل باللغة العربية. "
+    "يجب أن يشمل:\n"
+    "- النص الكامل لكل ما قيل في الفيديو حرفياً باللغة العربية\n"
+    "- وصف كل ما يظهر على الشاشة من نصوص وصور وحركات\n"
+    "- المواضيع الرئيسية والحجج والاستنتاجات\n"
+    "- جميع الآيات القرآنية والأحاديث النبوية والمراجع العلمية المذكورة بنصها الكامل\n"
+    "- أسماء المتحدثين إن ذُكرت\n"
+    "- كل التفاصيل الدقيقة والأمثلة والقصص المذكورة\n"
+    "كن شاملاً ودقيقاً قدر الإمكان — هذا النص سيُستخدم للإجابة على أسئلة لاحقاً."
 )
 
 SYSTEM_PROMPT_QA = (
-    "You are answering questions about a video. Below is a detailed transcript "
-    "and summary of the video. Use ONLY this information to answer questions. "
-    "Answer directly and concisely. Always respond in the same language as the "
-    "user's question."
+    "أنت تجيب على أسئلة حول فيديو. فيما يلي النص التفصيلي الكامل للفيديو. "
+    "استخدم هذه المعلومات فقط للإجابة على الأسئلة. "
+    "أجب بشكل مباشر ودقيق. أجب دائماً باللغة العربية."
 )
 
 INSIGHTS_PROMPT = (
@@ -313,7 +313,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
 
         transcript_response = await gemini_with_retry(
-            lambda: analysis_chat.send_message("Go ahead, produce the full transcript and summary."),
+            lambda: analysis_chat.send_message("تفضل، أنتج النص الكامل والملخص التفصيلي باللغة العربية."),
             status_msg=status_msg,
         )
         transcript = transcript_response.text
