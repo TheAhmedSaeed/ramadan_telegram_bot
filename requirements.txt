@@ -1,0 +1,5 @@
+python-telegram-bot==21.6
+google-genai==1.14.0
+python-dotenv==1.1.0
+pyrogram==2.0.106
+tgcrypto==1.2.5
