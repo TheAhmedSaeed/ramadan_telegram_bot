@@ -92,6 +92,28 @@ def extract_question(text: str) -> str:
     return result if result else text.strip()
 
 
+async def safe_edit_text(msg, text, **kwargs):
+    """Edit message with Markdown, fall back to plain text if parsing fails."""
+    try:
+        await msg.edit_text(text, parse_mode="Markdown", **kwargs)
+    except BadRequest as e:
+        if "parse entities" in str(e).lower() or "can't find end" in str(e).lower():
+            await msg.edit_text(text, **kwargs)
+        else:
+            raise
+
+
+async def safe_reply_text(msg, text, **kwargs):
+    """Reply with Markdown, fall back to plain text if parsing fails."""
+    try:
+        return await msg.reply_text(text, parse_mode="Markdown", **kwargs)
+    except BadRequest as e:
+        if "parse entities" in str(e).lower() or "can't find end" in str(e).lower():
+            return await msg.reply_text(text, **kwargs)
+        else:
+            raise
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Hi! I can analyze videos and answer questions about them.\n\n"
@@ -240,13 +262,13 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # Generate 10 insights
         insights_response = chat.send_message(INSIGHTS_PROMPT)
 
-        await status_msg.edit_text(
+        await safe_edit_text(
+            status_msg,
             f"✅ Video analyzed!\n\n"
             f"{insights_response.text}\n\n"
             "—\n"
             "Ask me anything about this video.\n"
             "Send /done when you're finished.",
-            parse_mode="Markdown",
         )
 
     except Exception as e:
@@ -283,9 +305,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             [InlineKeyboardButton("📋 Copy Answer", callback_data="copy_answer")]
         ])
 
-        await status_msg.edit_text(
+        await safe_edit_text(
+            status_msg,
             answer,
-            parse_mode="Markdown",
             reply_markup=keyboard,
         )
     except Exception as e:
