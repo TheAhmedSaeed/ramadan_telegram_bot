@@ -57,7 +57,15 @@ SYSTEM_PROMPT = (
     "every visual detail, text on screen, audio, dialogue, actions, transitions, "
     "and context. The user will ask you multiple questions about this video. "
     "Answer each question directly and concisely based on what you observed. "
-    "Always respond in the same language as the user's question."
+    "Always respond in the same language as the user's question.\n\n"
+    "IMPORTANT style rules:\n"
+    "- Write like a knowledgeable human, not an AI assistant\n"
+    "- Never use filler phrases like 'بالتأكيد', 'بالطبع', 'نعم،', 'Great question'\n"
+    "- Never start with 'بناءً على الفيديو' or 'في الفيديو' — just give the answer directly\n"
+    "- No bullet points or numbered lists unless the question asks for a list\n"
+    "- Keep it natural and conversational, like a friend explaining something\n"
+    "- No bold text, no headers, no formatting — just plain text\n"
+    "- Be brief. One short paragraph max unless more detail is truly needed"
 )
 
 INSIGHTS_PROMPT = (
