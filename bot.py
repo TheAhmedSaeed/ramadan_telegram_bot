@@ -35,6 +35,9 @@ TELEGRAM_API_HASH = os.environ["TELEGRAM_API_HASH"]
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 GEMINI_MODEL = "gemini-2.5-flash"
 
+GEMINI_MAX_RETRIES = 3
+GEMINI_RETRY_DELAY = 5  # seconds
+
 pyro_client = PyroClient(
     "bot_session",
     api_id=TELEGRAM_API_ID,
@@ -68,11 +71,7 @@ INSIGHTS_PROMPT = (
 
 
 def extract_question(text: str) -> str:
-    """Extract the actual question from a forwarded message.
-
-    Strips common header patterns (e.g. 'السؤال التفاعلي للحلقة...')
-    and footer patterns (e.g. '@bot_name', 'ترسل الإجابة هنا').
-    """
+    """Extract the actual question from a forwarded message."""
     lines = text.strip().split("\n")
     cleaned = []
     skip_patterns = [
@@ -114,6 +113,60 @@ async def safe_reply_text(msg, text, **kwargs):
             raise
 
 
+async def gemini_with_retry(func, status_msg=None):
+    """Call a Gemini function with automatic retry on 503 errors."""
+    for attempt in range(1, GEMINI_MAX_RETRIES + 1):
+        try:
+            return func()
+        except Exception as e:
+            if "503" in str(e) or "UNAVAILABLE" in str(e).upper():
+                if attempt < GEMINI_MAX_RETRIES:
+                    logger.warning(
+                        f"Gemini 503, retrying ({attempt}/{GEMINI_MAX_RETRIES})..."
+                    )
+                    if status_msg:
+                        await safe_edit_text(
+                            status_msg,
+                            f"⏳ Gemini is busy, retrying ({attempt}/{GEMINI_MAX_RETRIES})...",
+                        )
+                    await asyncio.sleep(GEMINI_RETRY_DELAY * attempt)
+                else:
+                    raise
+            else:
+                raise
+
+
+async def download_with_progress(
+    pyro_client, chat_id, message_id, tmp_path, status_msg, total_size
+):
+    """Download via Pyrogram with progress updates."""
+    last_percent = -1
+
+    async def progress(current, total):
+        nonlocal last_percent
+        if total == 0:
+            return
+        percent = int(current * 100 / total)
+        # Only update every 10% to avoid Telegram rate limits
+        if percent // 10 > last_percent // 10:
+            last_percent = percent
+            bar_filled = percent // 10
+            bar_empty = 10 - bar_filled
+            bar = "█" * bar_filled + "░" * bar_empty
+            mb_done = current / (1024 * 1024)
+            mb_total = total / (1024 * 1024)
+            try:
+                await status_msg.edit_text(
+                    f"⏬ Downloading: {bar} {percent}%\n"
+                    f"{mb_done:.0f}MB / {mb_total:.0f}MB"
+                )
+            except Exception:
+                pass  # ignore rate limit errors
+
+    pyro_msg = await pyro_client.get_messages(chat_id, message_id)
+    await pyro_msg.download(file_name=tmp_path, progress=progress)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Hi! I can analyze videos and answer questions about them.\n\n"
@@ -143,19 +196,12 @@ async def handle_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text("No active session. Send me a video to start.")
 
 
-async def download_via_pyrogram(message_id: int, chat_id: int, tmp_path: str) -> None:
-    pyro_msg = await pyro_client.get_messages(chat_id, message_id)
-    await pyro_msg.download(file_name=tmp_path)
-
-
 async def handle_copy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle the copy button callback."""
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
     answer = user_last_answer.get(user_id)
     if answer:
-        # Send as a plain text message the user can easily copy
         await query.message.reply_text(
             f"```\n{answer}\n```",
             parse_mode="Markdown",
@@ -189,17 +235,20 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
             tmp_path = tmp.name
 
+        # Try Bot API first (<20MB), fall back to Pyrogram with progress for larger
         try:
             file = await context.bot.get_file(video.file_id)
             await file.download_to_drive(custom_path=tmp_path)
         except BadRequest as e:
             if "file is too big" in str(e).lower():
-                logger.info("File too big for Bot API, using Pyrogram...")
-                await status_msg.edit_text(
-                    f"⏬ Downloading large video ({file_size_mb:.0f}MB)..."
-                )
-                await download_via_pyrogram(
-                    message.message_id, message.chat_id, tmp_path
+                logger.info("File too big for Bot API, using Pyrogram with progress...")
+                await download_with_progress(
+                    pyro_client,
+                    message.chat_id,
+                    message.message_id,
+                    tmp_path,
+                    status_msg,
+                    video.file_size or 0,
                 )
             else:
                 raise
@@ -209,7 +258,10 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         await status_msg.edit_text("☁️ Uploading to Gemini...")
 
-        uploaded_file = gemini_client.files.upload(file=tmp_path)
+        uploaded_file = await gemini_with_retry(
+            lambda: gemini_client.files.upload(file=tmp_path),
+            status_msg=status_msg,
+        )
 
         while uploaded_file.state.name == "PROCESSING":
             await asyncio.sleep(2)
@@ -259,8 +311,11 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "chat": chat,
         }
 
-        # Generate 10 insights
-        insights_response = chat.send_message(INSIGHTS_PROMPT)
+        # Generate 10 insights with retry
+        insights_response = await gemini_with_retry(
+            lambda: chat.send_message(INSIGHTS_PROMPT),
+            status_msg=status_msg,
+        )
 
         await safe_edit_text(
             status_msg,
@@ -295,7 +350,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     status_msg = await update.message.reply_text("Thinking...")
 
     try:
-        response = session["chat"].send_message(question)
+        response = await gemini_with_retry(
+            lambda: session["chat"].send_message(question),
+            status_msg=status_msg,
+        )
         answer = response.text
 
         # Store for copy button
