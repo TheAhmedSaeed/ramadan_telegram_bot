@@ -33,8 +33,7 @@ TELEGRAM_API_ID = int(os.environ["TELEGRAM_API_ID"])
 TELEGRAM_API_HASH = os.environ["TELEGRAM_API_HASH"]
 
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-GEMINI_MODEL_ANALYSIS = "gemini-2.5-flash"  # Full model for video analysis
-GEMINI_MODEL_QA = "gemini-2.5-flash"  # Same model for Q&A but text-only (fast)
+GEMINI_MODEL = "gemini-2.5-flash"
 
 GEMINI_MAX_RETRIES = 3
 GEMINI_RETRY_DELAY = 5  # seconds
@@ -53,28 +52,12 @@ user_sessions = {}
 # Store last answer for copy button
 user_last_answer = {}
 
-SYSTEM_PROMPT_ANALYSIS = (
+SYSTEM_PROMPT = (
     "You have been given a video to analyze. Study it thoroughly — "
     "every visual detail, text on screen, audio, dialogue, actions, transitions, "
-    "and context."
-)
-
-TRANSCRIPT_PROMPT = (
-    "أنتج نصاً تفصيلياً شاملاً لهذا الفيديو بالكامل باللغة العربية. "
-    "يجب أن يشمل:\n"
-    "- النص الكامل لكل ما قيل في الفيديو حرفياً باللغة العربية\n"
-    "- وصف كل ما يظهر على الشاشة من نصوص وصور وحركات\n"
-    "- المواضيع الرئيسية والحجج والاستنتاجات\n"
-    "- جميع الآيات القرآنية والأحاديث النبوية والمراجع العلمية المذكورة بنصها الكامل\n"
-    "- أسماء المتحدثين إن ذُكرت\n"
-    "- كل التفاصيل الدقيقة والأمثلة والقصص المذكورة\n"
-    "كن شاملاً ودقيقاً قدر الإمكان — هذا النص سيُستخدم للإجابة على أسئلة لاحقاً."
-)
-
-SYSTEM_PROMPT_QA = (
-    "أنت تجيب على أسئلة حول فيديو. فيما يلي النص التفصيلي الكامل للفيديو. "
-    "استخدم هذه المعلومات فقط للإجابة على الأسئلة. "
-    "أجب بشكل مباشر ودقيق. أجب دائماً باللغة العربية."
+    "and context. The user will ask you multiple questions about this video. "
+    "Answer each question directly and concisely based on what you observed. "
+    "Always respond in the same language as the user's question."
 )
 
 INSIGHTS_PROMPT = (
@@ -290,13 +273,13 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
             return
 
-        await status_msg.edit_text("🔍 Analyzing video — extracting full transcript...")
+        await status_msg.edit_text("🔍 Analyzing video and extracting insights...")
 
-        # Step 1: Use full model to extract detailed transcript from video
-        analysis_chat = gemini_client.chats.create(
-            model=GEMINI_MODEL_ANALYSIS,
+        # Create a chat session with the video pre-loaded
+        chat = gemini_client.chats.create(
+            model=GEMINI_MODEL,
             config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT_ANALYSIS,
+                system_instruction=SYSTEM_PROMPT,
             ),
             history=[
                 types.Content(
@@ -306,38 +289,8 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                             file_uri=uploaded_file.uri,
                             mime_type=uploaded_file.mime_type,
                         ),
-                        types.Part.from_text(text=TRANSCRIPT_PROMPT),
-                    ],
-                ),
-            ],
-        )
-
-        transcript_response = await gemini_with_retry(
-            lambda: analysis_chat.send_message("تفضل، أنتج النص الكامل والملخص التفصيلي باللغة العربية."),
-            status_msg=status_msg,
-        )
-        transcript = transcript_response.text
-
-        await status_msg.edit_text("💡 Generating insights...")
-
-        # Step 2: Generate insights using the full model (still has video context)
-        insights_response = await gemini_with_retry(
-            lambda: analysis_chat.send_message(INSIGHTS_PROMPT),
-            status_msg=status_msg,
-        )
-
-        # Step 3: Create a fast text-only chat for Q&A using flash-lite
-        qa_chat = gemini_client.chats.create(
-            model=GEMINI_MODEL_QA,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT_QA,
-            ),
-            history=[
-                types.Content(
-                    role="user",
-                    parts=[
                         types.Part.from_text(
-                            text=f"Here is the full transcript and summary of the video:\n\n{transcript}"
+                            text="Study this video thoroughly. Confirm you're ready."
                         ),
                     ],
                 ),
@@ -345,18 +298,24 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     role="model",
                     parts=[
                         types.Part.from_text(
-                            text="I've read the full transcript. Ready for your questions."
+                            text="I've analyzed the video thoroughly. Ready for your questions."
                         ),
                     ],
                 ),
             ],
         )
 
-        # Store session with the fast Q&A chat
+        # Store session
         user_sessions[user_id] = {
             "uploaded_file": uploaded_file,
-            "chat": qa_chat,
+            "chat": chat,
         }
+
+        # Generate 10 insights with retry
+        insights_response = await gemini_with_retry(
+            lambda: chat.send_message(INSIGHTS_PROMPT),
+            status_msg=status_msg,
+        )
 
         await safe_edit_text(
             status_msg,
